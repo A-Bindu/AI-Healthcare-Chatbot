@@ -1,0 +1,223 @@
+import sqlite3
+import pandas as pd
+import tkinter as tk
+from tkinter import messagebox
+import webbrowser
+import threading
+
+excel_file = r"C:\Users\Nihal kumar Maddani\Desktop\pythonpractice\doctor.xlsx"
+db_file = "careconnect.db"
+
+def initialize_database():
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    cursor.execute("DROP TABLE IF EXISTS doctors")
+    cursor.execute("""
+    CREATE TABLE doctors (
+        symptom1 TEXT,
+        symptom2 TEXT,
+        symptom3 TEXT,
+        disease TEXT,
+        specialization TEXT,
+        doctor_name TEXT,
+        contact TEXT
+    )
+    """)
+    conn.commit()
+    conn.close()
+
+def load_data_from_excel():
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    try:
+        df = pd.read_excel(excel_file, sheet_name="Diseases")
+        df.columns = df.columns.str.strip()
+        df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+        for _, row in df.iterrows():
+            cursor.execute("""
+            INSERT INTO doctors (symptom1, symptom2, symptom3, disease, specialization, doctor_name, contact)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                row["Symptom A"],
+                row["Symptom B"],
+                row["Symptom C"],
+                row["Disease Name"],
+                row["Doctor Specialization"],
+                row["Doctors (India)"],
+                row["Column1(contact)"]
+            ))
+        conn.commit()
+    except Exception as e:
+        messagebox.showerror("Error", f"Error loading data from Excel: {e}")
+    finally:
+        conn.close()
+
+def predict_disease(symptoms):
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    symptoms = [symptom.strip().lower() for symptom in symptoms if symptom.strip()]
+    if len(symptoms) < 3:
+        return []
+    cursor.execute("""
+    SELECT DISTINCT disease 
+    FROM doctors 
+    WHERE (LOWER(symptom1) LIKE ? OR LOWER(symptom2) LIKE ? OR LOWER(symptom3) LIKE ?)
+    """, ('%' + symptoms[0] + '%', '%' + symptoms[1] + '%', '%' + symptoms[2] + '%'))
+    diseases = cursor.fetchall()
+    conn.close()
+    return [disease[0] for disease in diseases] if diseases else []
+
+def get_doctor_details(disease):
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    cursor.execute("""
+    SELECT DISTINCT specialization, doctor_name, contact 
+    FROM doctors 
+    WHERE LOWER(disease) = LOWER(?)
+    """, (disease,))
+    doctors = cursor.fetchall()
+    conn.close()
+    return doctors
+
+def get_resources(disease):
+    resources = {
+        "influenza": ["https://youtu.be/0P0eBkPvyfY"],
+        "heart attack": ["https://youtu.be/P-Ed7o18hTw"],
+        "irritable bowel syndrome": ["https://youtu.be/qfP9JgQs5jc"],
+        "rheumatoid arthritis": ["https://youtu.be/P9qmT8fpYSc"],
+        "diabetes": ["https://youtu.be/1qvHZVg_iNo"],
+    }
+    return resources.get(disease.lower(), ["No specific resource found."])
+
+class CareConnectApp(tk.Tk):
+    def _init_(self):
+        super()._init_()
+        self.title("CareConnect AI")
+        self.geometry("500x600")
+        self.chat_log = tk.Text(self, state=tk.DISABLED, bg="lightblue", fg="black", wrap=tk.WORD)
+        self.chat_log.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        self.entry = tk.Entry(self, bg="white", fg="black")
+        self.entry.pack(padx=10, pady=5, fill=tk.X)
+        self.entry.bind("<Return>", self.process_input)
+        self.send_button = tk.Button(self, text="Send", command=self.process_input)
+        self.send_button.pack(pady=5)
+        self.state = "intro"
+        self.symptoms = []
+        self.disease = None
+        self.add_message("CareConnect AI: Hey! I am CareConnect chatbot. How can I assist you?")
+
+    def add_message(self, message):
+        self.chat_log.config(state=tk.NORMAL)
+        self.chat_log.insert(tk.END, f"{message}\n\n")
+        self.chat_log.config(state=tk.DISABLED)
+        self.chat_log.yview(tk.END)
+
+    def add_clickable_resource(self, message, link):
+        self.chat_log.config(state=tk.NORMAL)
+        self.chat_log.insert(tk.END, f"{message} ", "link")
+        self.chat_log.insert(tk.END, "\n\n")
+        self.chat_log.tag_config("link", foreground="blue", underline=1)
+        self.chat_log.tag_bind("link", "<Button-1>", lambda e: webbrowser.open(link))
+        self.chat_log.config(state=tk.DISABLED)
+        self.chat_log.yview(tk.END)
+
+    def process_input(self, event=None):
+        user_input = self.entry.get().strip()
+        self.entry.delete(0, tk.END)
+        if not user_input:
+            return
+        self.add_message(f"You: {user_input}")
+        if self.state == "intro":
+            if "health issue" in user_input.lower():
+                self.state = "ask_symptoms"
+                self.add_message("CareConnect AI: Please provide your symptoms, separated by commas.")
+            else:
+                self.add_message("CareConnect AI: I'm here to help with health issues. Tell me how I can assist you.")
+        elif self.state == "ask_symptoms":
+            self.symptoms = user_input.split(",")
+            if len(self.symptoms) < 3:
+                self.add_message("CareConnect AI: Please provide at least 3 symptoms.")
+                return
+            diseases = predict_disease(self.symptoms)
+            if diseases:
+                self.disease = diseases[0]
+                self.add_message(f"CareConnect AI: Based on your symptoms, the possible disease is: {self.disease.capitalize()}.")
+                self.add_message("CareConnect AI: Do you need doctor recommendations? (yes/no)")
+                self.state = "ask_doctor"
+            else:
+                self.add_message("CareConnect AI: No diseases matched your symptoms. Please consult a doctor.")
+                self.state = "intro"
+        elif self.state == "ask_doctor":
+            if user_input.lower() == "yes":
+                doctors = get_doctor_details(self.disease)
+                if doctors:
+                    for specialization, name, contact in doctors:
+                        self.add_message(f"Doctor: {name}, Specialization: {specialization}, Contact: {contact}")
+                else:
+                    self.add_message("CareConnect AI: No doctor recommendations available for this disease.")
+                self.add_message("CareConnect AI: Do you need resources for further clarification? (yes/no)")
+                self.state = "ask_resources"
+            elif user_input.lower() == "no":
+                self.add_message("CareConnect AI: Let me know how I can assist you.")
+                self.state = "ask_help"
+            else:
+                self.add_message("CareConnect AI: Please respond with 'yes' or 'no'.")
+        elif self.state == "ask_resources":
+            if user_input.lower() == "yes":
+                resources = get_resources(self.disease)
+                for resource in resources:
+                    self.add_clickable_resource("Resource: Click here", resource)
+                self.add_message("CareConnect AI: Do you need doctor information related to this disease? (yes/no)")
+                self.state = "ask_doctor_info"
+            elif user_input.lower() == "no":
+                self.add_message("CareConnect AI: Let me know how I can assist you.")
+                self.state = "ask_help"
+            else:
+                self.add_message("CareConnect AI: Please respond with 'yes' or 'no'.")
+        elif self.state == "ask_help":
+            if "resource on" in user_input.lower():
+                disease = user_input.split("on")[-1].strip()
+                resources = get_resources(disease)
+                for resource in resources:
+                    self.add_clickable_resource("Resource: Click here", resource)
+                self.add_message("CareConnect AI: Do you need doctor information related to this disease? (yes/no)")
+                self.state = "ask_doctor_info"
+            elif "exit" in user_input.lower():
+                self.add_message("CareConnect AI: Thank you! Stay healthy.")
+                self.state = "intro"
+            else:
+                self.add_message("CareConnect AI: How can I assist you further?")
+                self.state = "ask_help"
+        elif self.state == "ask_doctor_info":
+            if user_input.lower() == "yes":
+                doctors = get_doctor_details(self.disease)
+                if doctors:
+                    for specialization, name, contact in doctors:
+                        self.add_message(f"Doctor: {name}, Specialization: {specialization}, Contact: {contact}")
+                else:
+                    self.add_message("CareConnect AI: No doctor recommendations available for this disease.")
+                self.add_message("CareConnect AI: Would you like to enter more symptoms? (yes/no)")
+                self.state = "ask_more_symptoms"
+            elif user_input.lower() == "no":
+                self.add_message("CareConnect AI: Would you like to enter more symptoms? (yes/no)")
+                self.state = "ask_more_symptoms"
+            else:
+                self.add_message("CareConnect AI: Please respond with 'yes' or 'no'.")
+        elif self.state == "ask_more_symptoms":
+            if user_input.lower() == "yes":
+                self.state = "ask_symptoms"
+                self.add_message("CareConnect AI: Please provide new symptoms.")
+            elif user_input.lower() == "no":
+                self.add_message("CareConnect AI: Thank you! Stay healthy.")
+                self.state = "intro"
+            else:
+                self.add_message("CareConnect AI: Please respond with 'yes' or 'no'.")
+
+def run_app():
+    initialize_database()
+    load_data_from_excel()
+    app = CareConnectApp()
+    app.mainloop()
+
+if _name_ == "_main_":
+    threading.Thread(target=run_app).start()
